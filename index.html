@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="아기 골든 햄스터와 함께 해바라기씨를 모으는 포근한 정원 플랫포머"
+    />
+    <title>햄찌의 씨앗 모험</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <section class="game-frame" aria-label="햄찌의 씨앗 모험 게임">
+        <canvas
+          id="game-canvas"
+          width="1280"
+          height="720"
+          tabindex="0"
+          aria-label="햄찌의 씨앗 모험 플레이 화면"
+        ></canvas>
+
+        <div id="hud" class="hud is-hidden" aria-live="polite">
+          <div class="hud-brand">
+            <span class="brand-seed" aria-hidden="true"></span>
+            <span>햄찌의 씨앗 모험</span>
+          </div>
+          <div class="hud-center">
+            <div class="hud-pill health-pill" aria-label="체력">
+              <span class="hud-label">마음</span>
+              <span id="health-value" class="hearts">♥ ♥ ♥</span>
+            </div>
+            <div class="hud-pill">
+              <span class="mini-seed" aria-hidden="true"></span>
+              <span id="seed-value">0 / 36</span>
+            </div>
+            <div class="hud-pill">
+              <span aria-hidden="true">✦</span>
+              <span id="secret-value">0 / 3</span>
+            </div>
+            <div id="power-status" class="hud-pill power-pill is-hidden" aria-label="복슬 파워 상태">
+              <span class="power-spark" aria-hidden="true">✦</span>
+              <span><strong>복슬 파워</strong><small>다음 피해 1회 방어</small></span>
+            </div>
+          </div>
+          <div class="hud-actions">
+            <span id="time-value" class="time-value">00:00</span>
+            <button id="mute-button" class="icon-button" type="button" aria-label="소리 끄기">♪</button>
+          </div>
+        </div>
+
+        <div id="title-screen" class="screen title-screen">
+          <div class="title-glow glow-one"></div>
+          <div class="title-glow glow-two"></div>
+          <div class="title-card glass-card">
+            <p class="eyebrow">해바라기 정원에서 펼쳐지는 작은 모험</p>
+            <h1><span>햄찌의</span> 씨앗 모험</h1>
+            <p class="title-copy">
+              통통 뛰고, 반짝이는 씨앗을 모으고,<br />해가 지기 전에 포근한 둥지로 돌아가요.
+            </p>
+            <button id="start-button" class="primary-button" type="button">
+              <span>모험 시작</span><span aria-hidden="true">→</span>
+            </button>
+
+            <div class="control-grid" aria-label="게임 조작법">
+              <div class="control-item">
+                <span class="key-pair"><kbd>A</kbd><kbd>D</kbd></span>
+                <span>이동</span>
+              </div>
+              <div class="control-item">
+                <kbd class="wide-key">SPACE</kbd>
+                <span>점프</span>
+              </div>
+              <div class="control-item">
+                <kbd>ESC</kbd>
+                <span>잠시 쉬기</span>
+              </div>
+            </div>
+            <p class="keyboard-note">방향키와 W / ↑ 키도 사용할 수 있어요</p>
+          </div>
+
+          <div class="title-badges" aria-hidden="true">
+            <span>포근한 정원</span><span>숨은 씨앗 3곳</span><span>복슬 파워업</span>
+          </div>
+        </div>
+
+        <div id="pause-screen" class="screen overlay-screen is-hidden">
+          <div class="glass-card compact-card">
+            <p class="eyebrow">잠깐 쉬어가요</p>
+            <h2>일시정지</h2>
+            <p>햄찌가 정원 그늘에서 기다리고 있어요.</p>
+            <div class="button-stack">
+              <button id="resume-button" class="primary-button" type="button">계속하기</button>
+              <button id="restart-button" class="secondary-button" type="button">처음부터 다시</button>
+              <button id="title-button" class="text-button" type="button">첫 화면으로</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="complete-screen" class="screen overlay-screen is-hidden">
+          <div class="glass-card complete-card">
+            <div class="complete-icon" aria-hidden="true">⌂</div>
+            <p class="eyebrow">포근한 둥지 도착!</p>
+            <h2>오늘의 모험 완료</h2>
+            <p id="complete-message">햄찌가 간식을 가득 안고 집으로 돌아왔어요.</p>
+            <div class="result-grid">
+              <div><span>모은 씨앗</span><strong id="result-seeds">0 / 36</strong></div>
+              <div><span>숨은 곳</span><strong id="result-secrets">0 / 3</strong></div>
+              <div><span>걸린 시간</span><strong id="result-time">00:00</strong></div>
+            </div>
+            <p id="best-result" class="best-result"></p>
+            <div class="button-row">
+              <button id="play-again-button" class="primary-button" type="button">한 번 더</button>
+              <button id="complete-title-button" class="secondary-button" type="button">첫 화면</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="respawn-note" class="respawn-note" aria-live="polite">씨앗 바구니에서 다시 출발!</div>
+        <div class="corner-help" aria-hidden="true">R 다시 시작 · M 소리 · ESC 일시정지</div>
+      </section>
+    </main>
+
+    <noscript>이 게임을 플레이하려면 JavaScript를 켜주세요.</noscript>
+    <script src="logic.js"></script>
+    <script src="game.js"></script>
+  </body>
+</html>

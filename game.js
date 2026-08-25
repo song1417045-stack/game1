@@ -12,6 +12,9 @@
   const GROUND_Y = 600;
   const FIXED_STEP = 1 / 60;
   const STORAGE_KEY = "hamjji-seed-adventure:v1";
+  const WEATHER_CACHE_KEY = "hamjji-garden-weather:v1";
+  const WEATHER_REFRESH_MS = 10 * 60 * 1000;
+  const SEOUL_WEATHER_URL = "https://api.open-meteo.com/v1/forecast?latitude=37.5665&longitude=126.9780&current=temperature_2m,precipitation,rain,snowfall,weather_code,cloud_cover,is_day,wind_speed_10m,shortwave_radiation&hourly=precipitation_probability,precipitation,weather_code,shortwave_radiation&daily=sunrise,sunset,sunshine_duration,precipitation_sum,precipitation_probability_max&timezone=Asia%2FSeoul&forecast_days=2";
   const TOTAL_SEEDS = 36;
   const TOTAL_SECRETS = 3;
 
@@ -29,6 +32,14 @@
     seeds: document.getElementById("seed-value"),
     secrets: document.getElementById("secret-value"),
     time: document.getElementById("time-value"),
+    weatherStatus: document.getElementById("weather-status"),
+    weatherIcon: document.getElementById("weather-icon"),
+    weatherBrief: document.getElementById("weather-brief"),
+    weatherDetail: document.getElementById("weather-detail"),
+    titleWeatherIcon: document.getElementById("title-weather-icon"),
+    titleWeatherBrief: document.getElementById("title-weather-brief"),
+    titleWeatherDetail: document.getElementById("title-weather-detail"),
+    titleSunTimes: document.getElementById("title-sun-times"),
     mute: document.getElementById("mute-button"),
     resultSeeds: document.getElementById("result-seeds"),
     resultSecrets: document.getElementById("result-secrets"),
@@ -71,6 +82,10 @@
   let checkpointSnapshot = null;
   let deviceScale = 1;
   let records = loadRecords();
+  let weather = loadWeatherCache() || createFallbackWeather();
+  let lastWeatherFetchMs = 0;
+  let weatherRefreshTimer = null;
+  let weatherFetchInFlight = false;
 
   class ToyAudio {
     constructor() {
@@ -845,6 +860,7 @@
     } else {
       drawWorld();
     }
+    drawWeatherForeground();
 
     if (screenFlash > 0) {
       ctx.save();
@@ -862,19 +878,53 @@
     }
   }
 
+  function getWeatherScene() {
+    const solar = Logic.solarPhase(Date.now(), weather.sunriseMs, weather.sunsetMs);
+    const info = Logic.weatherCodeInfo(weather.weatherCode);
+    const cloud = Logic.clamp(weather.cloudCover / 100, 0, 1);
+    const radiation = Logic.clamp(weather.shortwaveRadiation / 720, 0, 1);
+    const forecastMood = weather.precipitation > 0.01 ? 0 : Logic.clamp((weather.rainChance - 35) / 65, 0, 1);
+    return {
+      ...solar,
+      info,
+      cloud,
+      radiation,
+      forecastMood,
+      warmth: Logic.clamp((weather.temperature - 24) / 14, -1, 1),
+    };
+  }
+
   function drawBackground(cameraX) {
+    const scene = getWeatherScene();
     const sky = ctx.createLinearGradient(0, 0, 0, HEIGHT);
-    sky.addColorStop(0, "#99d5ec");
-    sky.addColorStop(0.58, "#f6dfa4");
-    sky.addColorStop(1, "#dbe8a0");
+    if (scene.phase === "night") {
+      sky.addColorStop(0, "#152b4d");
+      sky.addColorStop(0.58, "#455c78");
+      sky.addColorStop(1, "#728171");
+    } else if (scene.phase === "dawn") {
+      sky.addColorStop(0, "#7c8fbd");
+      sky.addColorStop(0.58, "#f2b58e");
+      sky.addColorStop(1, "#d8d895");
+    } else if (scene.phase === "dusk") {
+      sky.addColorStop(0, "#68658e");
+      sky.addColorStop(0.58, "#efa06e");
+      sky.addColorStop(1, "#c2bd7b");
+    } else {
+      const grey = scene.cloud * 0.48 + scene.forecastMood * 0.2;
+      sky.addColorStop(0, grey > 0.48 ? "#8faebc" : "#91d2ea");
+      sky.addColorStop(0.58, grey > 0.48 ? "#ced1bc" : "#f4dda2");
+      sky.addColorStop(1, scene.warmth > 0.4 ? "#e4d28e" : "#d9e7a0");
+    }
     ctx.fillStyle = sky;
     ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+    drawCelestial(scene);
 
     if (images.background.complete && images.background.naturalWidth) {
       const tileWidth = WIDTH + 80;
       const offset = -((cameraX * 0.035) % tileWidth) - 40;
       ctx.save();
-      ctx.globalAlpha = 0.88;
+      ctx.globalAlpha = scene.phase === "night" ? 0.58 : 0.78 + scene.radiation * 0.12;
       ctx.drawImage(images.background, offset, -38, tileWidth, HEIGHT + 76);
       ctx.drawImage(images.background, offset + tileWidth - 2, -38, tileWidth, HEIGHT + 76);
       ctx.restore();
@@ -887,15 +937,141 @@
     ctx.fillStyle = wash;
     ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
+    drawWeatherClouds(cameraX, scene);
+
     ctx.save();
-    ctx.fillStyle = "rgba(255, 248, 197, 0.54)";
+    const pollenVisibility = (1 - scene.cloud * 0.6) * scene.daylight * (weather.precipitation > 0.01 ? 0.14 : 1);
+    ctx.fillStyle = `rgba(255, 248, 197, ${0.54 * pollenVisibility})`;
     for (let index = 0; index < 16; index += 1) {
-      const x = ((index * 173 - cameraX * (0.02 + (index % 3) * 0.01)) % (WIDTH + 80)) - 30;
+      const breeze = weather.windSpeed * performance.now() * 0.000035;
+      const x = ((index * 173 + breeze - cameraX * (0.02 + (index % 3) * 0.01)) % (WIDTH + 80)) - 30;
       const y = 95 + ((index * 71) % 360);
       const radius = 1.3 + (index % 4) * 0.7;
       ctx.beginPath();
       ctx.arc(x, y + Math.sin(performance.now() * 0.0008 + index) * 6, radius, 0, Math.PI * 2);
       ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawCelestial(scene) {
+    ctx.save();
+    if (scene.phase === "night") {
+      ctx.fillStyle = "rgba(255, 250, 218, 0.72)";
+      for (let index = 0; index < 28; index += 1) {
+        const x = 32 + ((index * 149) % 1210);
+        const y = 35 + ((index * 67) % 300);
+        const radius = 0.8 + (index % 3) * 0.65;
+        ctx.globalAlpha = 0.45 + Math.sin(performance.now() * 0.0015 + index) * 0.2;
+        ctx.beginPath();
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 0.92;
+      const moonGlow = ctx.createRadialGradient(1070, 112, 8, 1070, 112, 72);
+      moonGlow.addColorStop(0, "rgba(255, 249, 211, 0.82)");
+      moonGlow.addColorStop(1, "rgba(255, 249, 211, 0)");
+      ctx.fillStyle = moonGlow;
+      ctx.fillRect(990, 32, 160, 160);
+      ctx.fillStyle = "#fff5c9";
+      ctx.beginPath();
+      ctx.arc(1070, 112, 27, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      const daylightProgress = Logic.clamp((Date.now() - weather.sunriseMs) / Math.max(1, weather.sunsetMs - weather.sunriseMs), 0, 1);
+      const sunX = 95 + daylightProgress * 1090;
+      const sunY = 270 - Math.sin(daylightProgress * Math.PI) * 190;
+      const sunStrength = Logic.clamp(0.34 + scene.radiation * 0.7 - scene.cloud * 0.35, 0.16, 0.94);
+      const sunGlow = ctx.createRadialGradient(sunX, sunY, 8, sunX, sunY, 105);
+      sunGlow.addColorStop(0, `rgba(255, 247, 175, ${sunStrength})`);
+      sunGlow.addColorStop(1, "rgba(255, 226, 116, 0)");
+      ctx.fillStyle = sunGlow;
+      ctx.fillRect(sunX - 110, sunY - 110, 220, 220);
+      ctx.globalAlpha = sunStrength;
+      ctx.fillStyle = "#ffe477";
+      ctx.beginPath();
+      ctx.arc(sunX, sunY, 26, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawWeatherClouds(cameraX, scene) {
+    const amount = Math.round(2 + scene.cloud * 8 + scene.forecastMood * 3);
+    const speed = 0.003 + weather.windSpeed * 0.00016;
+    const drift = performance.now() * speed;
+    ctx.save();
+    for (let index = 0; index < amount; index += 1) {
+      const width = 110 + (index % 4) * 32;
+      const x = ((index * 211 + drift - cameraX * 0.018) % (WIDTH + 280)) - 150;
+      const y = 72 + ((index * 59) % 185);
+      const dark = Logic.clamp(scene.forecastMood * 0.45 + scene.cloud * 0.25, 0, 0.55);
+      ctx.fillStyle = scene.phase === "night"
+        ? `rgba(194, 207, 219, ${0.11 + scene.cloud * 0.17})`
+        : `rgba(${Math.round(245 - dark * 80)}, ${Math.round(249 - dark * 72)}, ${Math.round(242 - dark * 55)}, ${0.22 + scene.cloud * 0.34})`;
+      ctx.beginPath();
+      ctx.ellipse(x, y, width * 0.4, width * 0.15, 0, 0, Math.PI * 2);
+      ctx.ellipse(x - width * 0.23, y + 4, width * 0.3, width * 0.12, 0, 0, Math.PI * 2);
+      ctx.ellipse(x + width * 0.24, y + 6, width * 0.34, width * 0.13, 0, 0, Math.PI * 2);
+      ctx.ellipse(x - width * 0.08, y - width * 0.1, width * 0.24, width * 0.2, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawWeatherForeground() {
+    const scene = getWeatherScene();
+    ctx.save();
+    if (scene.phase === "night") {
+      ctx.fillStyle = "rgba(20, 40, 70, 0.25)";
+      ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    } else if (scene.phase === "dawn" || scene.phase === "dusk") {
+      ctx.fillStyle = `rgba(117, 72, 110, ${0.04 + scene.transition * 0.07})`;
+      ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    }
+    if (scene.warmth > 0.32) {
+      ctx.fillStyle = `rgba(255, 183, 76, ${scene.warmth * 0.045})`;
+      ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    } else if (scene.warmth < -0.35) {
+      ctx.fillStyle = `rgba(127, 190, 224, ${Math.abs(scene.warmth) * 0.055})`;
+      ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    }
+
+    const elapsedMs = performance.now();
+    if (scene.info.precipitation === "rain" && (weather.precipitation > 0.01 || weather.rain > 0.01)) {
+      const count = Math.round(28 + Logic.clamp(weather.precipitation, 0, 3) * 42);
+      ctx.strokeStyle = scene.phase === "night" ? "rgba(193, 225, 255, 0.62)" : "rgba(105, 157, 184, 0.48)";
+      ctx.lineWidth = weather.precipitation > 1 ? 2 : 1.35;
+      for (let index = 0; index < count; index += 1) {
+        const x = ((index * 101 + elapsedMs * (0.18 + weather.windSpeed * 0.004)) % (WIDTH + 120)) - 60;
+        const y = (index * 73 + elapsedMs * (0.58 + weather.precipitation * 0.1)) % (HEIGHT + 80) - 40;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x - 8 - weather.windSpeed * 0.35, y + 26);
+        ctx.stroke();
+      }
+    } else if (scene.info.precipitation === "snow" || weather.snowfall > 0.01) {
+      const count = 40 + Math.round(Logic.clamp(weather.snowfall, 0, 2) * 18);
+      ctx.fillStyle = "rgba(255, 255, 247, 0.76)";
+      for (let index = 0; index < count; index += 1) {
+        const x = ((index * 113 + elapsedMs * 0.025 * (1 + weather.windSpeed)) % (WIDTH + 80)) - 40;
+        const y = (index * 71 + elapsedMs * (0.045 + (index % 3) * 0.01)) % (HEIGHT + 50) - 25;
+        ctx.beginPath();
+        ctx.arc(x, y, 2 + (index % 3), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    if (scene.info.key === "fog") {
+      const fog = ctx.createLinearGradient(0, 160, 0, 650);
+      fog.addColorStop(0, "rgba(235, 243, 235, 0.08)");
+      fog.addColorStop(0.55, "rgba(235, 243, 235, 0.28)");
+      fog.addColorStop(1, "rgba(235, 243, 235, 0.08)");
+      ctx.fillStyle = fog;
+      ctx.fillRect(0, 100, WIDTH, 600);
+    }
+    if (scene.info.key === "storm" && Math.sin(elapsedMs * 0.0017) > 0.995) {
+      ctx.fillStyle = "rgba(245, 244, 214, 0.16)";
+      ctx.fillRect(0, 0, WIDTH, HEIGHT);
     }
     ctx.restore();
   }
@@ -1368,6 +1544,8 @@
   function drawSunflower(x, y, scale) {
     ctx.save();
     ctx.translate(x, y);
+    const breezeStrength = Logic.clamp(weather.windSpeed / 38, 0.015, 0.2);
+    ctx.rotate(Math.sin(performance.now() * (0.0008 + weather.windSpeed * 0.000025) + x * 0.012) * breezeStrength);
     ctx.scale(scale, scale);
     ctx.strokeStyle = "#5e965e";
     ctx.lineWidth = 14;
@@ -1521,6 +1699,159 @@
     }
   }
 
+  function createFallbackWeather() {
+    const shiftedNow = new Date(Date.now() + 9 * 60 * 60 * 1000);
+    const year = shiftedNow.getUTCFullYear();
+    const month = shiftedNow.getUTCMonth();
+    const date = shiftedNow.getUTCDate();
+    return {
+      source: "fallback",
+      cached: false,
+      fetchedAt: 0,
+      location: "서울",
+      temperature: 22,
+      precipitation: 0,
+      rain: 0,
+      snowfall: 0,
+      weatherCode: 1,
+      cloudCover: 28,
+      isDay: true,
+      windSpeed: 5,
+      shortwaveRadiation: 360,
+      rainChance: 0,
+      forecastPrecipitation: 0,
+      dailyPrecipitation: 0,
+      dailyRainChance: 0,
+      sunshineHours: 8,
+      sunriseMs: Date.UTC(year, month, date, 6) - 9 * 60 * 60 * 1000,
+      sunsetMs: Date.UTC(year, month, date, 19) - 9 * 60 * 60 * 1000,
+    };
+  }
+
+  function loadWeatherCache() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(WEATHER_CACHE_KEY) || "null");
+      if (!saved || !Number.isFinite(saved.fetchedAt) || Date.now() - saved.fetchedAt > 36 * 60 * 60 * 1000) {
+        return null;
+      }
+      return { ...createFallbackWeather(), ...saved, source: "cache", cached: true };
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function saveWeatherCache(nextWeather) {
+    try {
+      localStorage.setItem(WEATHER_CACHE_KEY, JSON.stringify(nextWeather));
+    } catch (_error) {
+      // 저장소가 막힌 환경에서도 현재 세션의 날씨 표현은 계속 사용한다.
+    }
+  }
+
+  function apiTimeToMs(value, utcOffsetSeconds) {
+    if (typeof value !== "string") return NaN;
+    const normalized = value.length === 16 ? `${value}:00` : value;
+    return Date.parse(`${normalized}Z`) - (Number(utcOffsetSeconds) || 0) * 1000;
+  }
+
+  function parseWeatherResponse(data) {
+    if (!data || !data.current || !data.daily || !data.hourly) {
+      throw new Error("날씨 응답 형식이 올바르지 않습니다.");
+    }
+    const offset = Number(data.utc_offset_seconds) || 9 * 60 * 60;
+    const absoluteHourlyTimes = (data.hourly.time || []).map((time) => {
+      const milliseconds = apiTimeToMs(time, offset);
+      return Number.isFinite(milliseconds) ? new Date(milliseconds).toISOString() : "";
+    });
+    const upcoming = Logic.nextHoursForecast(
+      absoluteHourlyTimes,
+      data.hourly.precipitation_probability || [],
+      data.hourly.precipitation || [],
+      Date.now(),
+      6,
+    );
+    const current = data.current;
+    return {
+      source: "live",
+      cached: false,
+      fetchedAt: Date.now(),
+      location: "서울",
+      temperature: Number(current.temperature_2m) || 0,
+      precipitation: Number(current.precipitation) || 0,
+      rain: Number(current.rain) || 0,
+      snowfall: Number(current.snowfall) || 0,
+      weatherCode: Number(current.weather_code) || 0,
+      cloudCover: Logic.clamp(Number(current.cloud_cover) || 0, 0, 100),
+      isDay: Number(current.is_day) === 1,
+      windSpeed: Math.max(0, Number(current.wind_speed_10m) || 0),
+      shortwaveRadiation: Math.max(0, Number(current.shortwave_radiation) || 0),
+      rainChance: upcoming.maxProbability,
+      forecastPrecipitation: upcoming.precipitationSum,
+      dailyPrecipitation: Number(data.daily.precipitation_sum?.[0]) || 0,
+      dailyRainChance: Number(data.daily.precipitation_probability_max?.[0]) || 0,
+      sunshineHours: Math.round(((Number(data.daily.sunshine_duration?.[0]) || 0) / 3600) * 10) / 10,
+      sunriseMs: apiTimeToMs(data.daily.sunrise?.[0], offset),
+      sunsetMs: apiTimeToMs(data.daily.sunset?.[0], offset),
+    };
+  }
+
+  function formatSeoulClock(milliseconds) {
+    if (!Number.isFinite(milliseconds)) return "--:--";
+    return new Intl.DateTimeFormat("ko-KR", {
+      timeZone: "Asia/Seoul",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    }).format(new Date(milliseconds));
+  }
+
+  function updateWeatherUi() {
+    const info = Logic.weatherCodeInfo(weather.weatherCode);
+    const roundedTemperature = Math.round(weather.temperature);
+    const sourceLabel = weather.source === "live" ? "실시간" : weather.source === "cache" ? "저장 날씨" : "기본 날씨";
+    const brief = `${roundedTemperature}° ${info.label}`;
+    const rainText = `6시간 비 ${Math.round(weather.rainChance)}%`;
+    const solarText = `일사 ${Math.round(weather.shortwaveRadiation)}W/m²`;
+    const currentRainText = `현재 강수 ${weather.precipitation.toFixed(1)}mm`;
+
+    ui.weatherIcon.textContent = info.icon;
+    ui.weatherBrief.textContent = brief;
+    ui.weatherDetail.textContent = `${rainText} · ${solarText}`;
+    ui.weatherStatus.setAttribute(
+      "aria-label",
+      `서울 ${sourceLabel}, ${info.label} ${roundedTemperature}도, ${currentRainText}, ${rainText}, ${solarText}`,
+    );
+    ui.titleWeatherIcon.textContent = info.icon;
+    ui.titleWeatherBrief.textContent = `서울 ${sourceLabel} · ${brief}`;
+    ui.titleWeatherDetail.textContent = `${currentRainText} · ${rainText} · ${solarText}`;
+    ui.titleSunTimes.textContent = `일출 ${formatSeoulClock(weather.sunriseMs)} · 일몰 ${formatSeoulClock(weather.sunsetMs)} · 예상 일조 ${weather.sunshineHours.toFixed(1)}시간`;
+  }
+
+  function scheduleWeatherRefresh() {
+    if (weatherRefreshTimer) window.clearTimeout(weatherRefreshTimer);
+    weatherRefreshTimer = window.setTimeout(refreshGardenWeather, WEATHER_REFRESH_MS);
+    if (weatherRefreshTimer && typeof weatherRefreshTimer.unref === "function") weatherRefreshTimer.unref();
+  }
+
+  async function refreshGardenWeather() {
+    if (weatherFetchInFlight) return;
+    weatherFetchInFlight = true;
+    lastWeatherFetchMs = Date.now();
+    try {
+      if (typeof window.fetch !== "function") throw new Error("fetch를 지원하지 않는 브라우저입니다.");
+      const response = await window.fetch(SEOUL_WEATHER_URL, { cache: "no-store" });
+      if (!response.ok) throw new Error(`날씨 서버 응답 ${response.status}`);
+      weather = parseWeatherResponse(await response.json());
+      saveWeatherCache(weather);
+    } catch (_error) {
+      if (weather.source === "live") weather = { ...weather, source: "cache", cached: true };
+    } finally {
+      weatherFetchInFlight = false;
+      updateWeatherUi();
+      scheduleWeatherRefresh();
+    }
+  }
+
   function handleKeyDown(event) {
     const handledCodes = [
       "ArrowLeft", "ArrowRight", "ArrowUp", "Space", "KeyA", "KeyD", "KeyW", "Escape", "KeyR", "KeyM",
@@ -1564,7 +1895,11 @@
   window.addEventListener("resize", resizeCanvas);
   window.addEventListener("blur", clearInputAndPause);
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) clearInputAndPause();
+    if (document.hidden) {
+      clearInputAndPause();
+    } else if (Date.now() - lastWeatherFetchMs > WEATHER_REFRESH_MS) {
+      refreshGardenWeather();
+    }
   });
 
   window.HamsterSeedAdventure = Object.freeze({
@@ -1601,11 +1936,29 @@
         hasGoal: Boolean(level.goal),
       };
     },
+    getWeather() {
+      const info = Logic.weatherCodeInfo(weather.weatherCode);
+      return {
+        source: weather.source,
+        location: weather.location,
+        temperature: weather.temperature,
+        condition: info.label,
+        precipitation: weather.precipitation,
+        rainChance: weather.rainChance,
+        shortwaveRadiation: weather.shortwaveRadiation,
+        sunrise: formatSeoulClock(weather.sunriseMs),
+        sunset: formatSeoulClock(weather.sunsetMs),
+        sunshineHours: weather.sunshineHours,
+      };
+    },
+    refreshWeather: refreshGardenWeather,
   });
 
   resizeCanvas();
   resetRun();
   setState("title");
   updateHud();
+  updateWeatherUi();
+  refreshGardenWeather();
   requestAnimationFrame(frameLoop);
 })();

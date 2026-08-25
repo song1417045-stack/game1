@@ -45,6 +45,10 @@
             </div>
           </div>
           <div class="hud-actions">
+            <div id="weather-status" class="weather-status" role="status" aria-label="서울 정원 날씨">
+              <span id="weather-icon" class="weather-icon" aria-hidden="true">○</span>
+              <span class="weather-copy"><strong id="weather-brief">서울 날씨</strong><small><span id="weather-detail">불러오는 중</span> · <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Open-Meteo</a></small></span>
+            </div>
             <span id="time-value" class="time-value">00:00</span>
             <button id="mute-button" class="icon-button" type="button" aria-label="소리 끄기">♪</button>
           </div>
@@ -78,10 +82,17 @@
               </div>
             </div>
             <p class="keyboard-note">방향키와 W / ↑ 키도 사용할 수 있어요</p>
+
+            <div id="title-weather" class="title-weather" role="status" aria-live="polite">
+              <span id="title-weather-icon" class="title-weather-icon" aria-hidden="true">○</span>
+              <span class="title-weather-main"><strong id="title-weather-brief">서울 정원 날씨를 살펴보는 중</strong><small id="title-weather-detail">날씨를 못 받아도 모험은 바로 시작할 수 있어요</small></span>
+              <span id="title-sun-times" class="title-sun-times">일출 · 일몰 확인 중</span>
+            </div>
           </div>
 
-          <div class="title-badges" aria-hidden="true">
+          <div class="title-badges">
             <span>포근한 정원</span><span>숨은 씨앗 3곳</span><span>복슬 파워업</span>
+            <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">날씨 Open-Meteo</a>
           </div>
         </div>
 

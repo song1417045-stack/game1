@@ -53,6 +53,9 @@ global.localStorage = {
   getItem() { return null; },
   setItem() {},
 };
+global.fetch = async () => {
+  throw new Error("offline smoke test");
+};
 let animationFrameCallback = null;
 const windowListeners = new Map();
 global.requestAnimationFrame = (callback) => {
@@ -74,6 +77,60 @@ test("level contains every planned collectible and progression element", () => {
   assert.equal(summary.enemies, 6);
   assert.equal(summary.hasCheckpoint, true);
   assert.equal(summary.hasGoal, true);
+});
+
+test("weather integration has an offline-safe Seoul fallback", () => {
+  const weather = window.HamsterSeedAdventure.getWeather();
+  assert.equal(weather.location, "서울");
+  assert.equal(weather.source, "fallback");
+  assert.equal(typeof weather.rainChance, "number");
+  assert.match(weather.sunrise, /^\d{2}:\d{2}$/);
+});
+
+test("live Seoul weather response reaches the public game state", async () => {
+  await new Promise((resolve) => setImmediate(resolve));
+  const offsetMs = 9 * 60 * 60 * 1000;
+  const toSeoulApiTime = (milliseconds) => new Date(milliseconds + offsetMs).toISOString().slice(0, 16);
+  const now = Date.now();
+  const localDate = toSeoulApiTime(now).slice(0, 10);
+  global.fetch = async () => ({
+    ok: true,
+    async json() {
+      return {
+        utc_offset_seconds: 32400,
+        current: {
+          temperature_2m: 27.9,
+          precipitation: 0.1,
+          rain: 0.1,
+          snowfall: 0,
+          weather_code: 51,
+          cloud_cover: 39,
+          is_day: 1,
+          wind_speed_10m: 3.6,
+          shortwave_radiation: 413,
+        },
+        hourly: {
+          time: [0, 1, 2, 3, 4, 5, 6].map((hour) => toSeoulApiTime(now + hour * 60 * 60 * 1000)),
+          precipitation_probability: [20, 35, 80, 45, 15, 10, 5],
+          precipitation: [0.1, 0.2, 0.8, 0.1, 0, 0, 0],
+        },
+        daily: {
+          sunrise: [`${localDate}T05:56`],
+          sunset: [`${localDate}T19:12`],
+          sunshine_duration: [12294],
+          precipitation_sum: [1.7],
+          precipitation_probability_max: [94],
+        },
+      };
+    },
+  });
+
+  await window.HamsterSeedAdventure.refreshWeather();
+  const weather = window.HamsterSeedAdventure.getWeather();
+  assert.equal(weather.source, "live");
+  assert.equal(weather.condition, "이슬비");
+  assert.equal(weather.rainChance, 80);
+  assert.equal(weather.shortwaveRadiation, 413);
 });
 
 test("start and pause transitions are callable from the page UI", () => {

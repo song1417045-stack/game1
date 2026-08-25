@@ -73,3 +73,32 @@ test("time formatting and best-record updates are stable", () => {
     { bestSeeds: 25, bestTime: 91 },
   );
 });
+
+test("WMO weather codes map to garden-friendly conditions", () => {
+  assert.deepEqual(Logic.weatherCodeInfo(0), {
+    key: "clear", label: "맑음", icon: "☀", precipitation: "none",
+  });
+  assert.equal(Logic.weatherCodeInfo(51).key, "drizzle");
+  assert.equal(Logic.weatherCodeInfo(82).precipitation, "rain");
+  assert.equal(Logic.weatherCodeInfo(75).precipitation, "snow");
+  assert.equal(Logic.weatherCodeInfo(95).key, "storm");
+});
+
+test("solar phase follows sunrise, daytime, sunset, and night", () => {
+  const sunrise = Date.UTC(2026, 7, 25, 21, 0);
+  const sunset = Date.UTC(2026, 7, 26, 10, 0);
+  assert.equal(Logic.solarPhase(sunrise - 2 * 60 * 60 * 1000, sunrise, sunset).phase, "night");
+  assert.equal(Logic.solarPhase(sunrise, sunrise, sunset).phase, "dawn");
+  assert.equal(Logic.solarPhase(sunrise + 3 * 60 * 60 * 1000, sunrise, sunset).phase, "day");
+  assert.equal(Logic.solarPhase(sunset, sunrise, sunset).phase, "dusk");
+  assert.equal(Logic.solarPhase(sunset + 2 * 60 * 60 * 1000, sunrise, sunset).phase, "night");
+});
+
+test("six-hour rain outlook ignores old and distant forecast entries", () => {
+  const now = Date.UTC(2026, 7, 25, 2, 0);
+  const times = [-2, 0, 1, 3, 6, 9].map((hours) => new Date(now + hours * 60 * 60 * 1000).toISOString());
+  assert.deepEqual(
+    Logic.nextHoursForecast(times, [99, 10, 35, 80, 55, 100], [8, 0, 0.2, 1.1, 0.4, 9], now, 6),
+    { maxProbability: 80, precipitationSum: 1.7, matched: 4 },
+  );
+});
